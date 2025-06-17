@@ -99,40 +99,6 @@ But DO NOT assume confirmation — always let the user confirm AFTER verifying a
                 },
               },
             },
-            {
-              type: 'function',
-              function: {
-                name: 'extractDateTime',
-                description:
-                  'Extracts structured date and time from user messages',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    input: {
-                      type: 'string',
-                      description: 'Raw user input like "next Monday at noon"',
-                    },
-                  },
-                  required: ['input'],
-                },
-              },
-            },
-            {
-              type: 'function',
-              function: {
-                name: 'checkAvailabilityAndGetTime',
-                description:
-                  'Checks Calendly and returns the actual available time and booking link near user request',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    date: { type: 'string' },
-                    time: { type: 'string' },
-                  },
-                  required: ['date', 'time'],
-                },
-              },
-            },
           ],
 
           tool_choice: 'auto',
