@@ -1,32 +1,15 @@
-# Dependencies
-node_modules/
-npm-debug.log
-yarn-error.log
-
-# Build output
-dist/
-build/
-
-# TypeScript
-*.tsbuildinfo
-
-# Environment variables
+# Node
+node_modules
+dist
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
-# Editor directories and files
-.idea/
-.vscode/
-*.swp
-*.swo
+# Vite/Next
+.client/.next
+client/node_modules
+client/dist
 
-# OS generated files
+# Logs
+*.log
+
+# OS
 .DS_Store
-Thumbs.db
-
-# Playwright specific
-playwright-report/
-test-results/
