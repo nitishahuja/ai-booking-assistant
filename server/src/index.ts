@@ -1,16 +1,8 @@
 // src/index.ts
-import http from 'http';
-import app from './app';
-import { initChatSocket } from './routes/chat-ws';
+import { app, server } from './app';
 
-const PORT = process.env.PORT || 3001;
-
-// Create the base HTTP server from the Express app
-const server = http.createServer(app);
-
-// Initialize WebSocket server
-initChatSocket(server);
+const PORT = process.env.PORT || 3000;
 
 server.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`🚀 Server is running on port ${PORT}`);
 });
