@@ -1,5 +1,5 @@
 // src/components/ChatInput.tsx
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { KeyboardEvent } from 'react';
 
 interface Props {
@@ -9,11 +9,21 @@ interface Props {
 
 const ChatInput = ({ onSendMessage, disabled }: Props) => {
   const [message, setMessage] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus input on mount
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   const handleSend = () => {
     if (message.trim() && !disabled) {
       onSendMessage(message.trim());
       setMessage('');
+      // Refocus the input after sending
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 0);
     }
   };
 
@@ -27,6 +37,7 @@ const ChatInput = ({ onSendMessage, disabled }: Props) => {
   return (
     <div className='chat-input-container'>
       <input
+        ref={inputRef}
         type='text'
         value={message}
         onChange={(e) => setMessage(e.target.value)}

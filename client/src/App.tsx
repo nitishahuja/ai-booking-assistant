@@ -6,12 +6,7 @@ import './components/chat.css';
 function App() {
   const [messages, setMessages] = useState<
     Array<{ text: string; isUser: boolean }>
-  >([
-    {
-      text: "👋 Hi! I'm your AI booking assistant. How can I help you today?",
-      isUser: false,
-    },
-  ]);
+  >([]);
 
   const handleSendMessage = (text: string) => {
     setMessages((prev) => [...prev, { text, isUser: true }]);

@@ -1,10 +1,18 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import ChatBubble from './ChatBubble';
 import ChatInput from './ChatInput';
+import LoadingBubble from './LoadingBubble';
 
 interface Message {
   text: string;
   isUser: boolean;
+  isComplete?: boolean;
+}
+
+interface ChatResponse {
+  text: string;
+  isComplete: boolean;
+  executingScript?: boolean;
 }
 
 interface ChatWindowProps {
@@ -12,10 +20,10 @@ interface ChatWindowProps {
   onSendMessage: (text: string) => void;
 }
 
-// Custom hook for WebSocket chat
 function useChatSocket(
-  onMessage: (msg: string) => void,
-  setTyping: (typing: boolean) => void
+  onMessage: (msg: ChatResponse) => void,
+  setTyping: (typing: boolean) => void,
+  setExecutingScript: (executing: boolean) => void
 ) {
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -24,24 +32,52 @@ function useChatSocket(
     socketRef.current = socket;
 
     socket.onopen = () => console.log('✅ Connected to assistant');
+
     socket.onmessage = (event) => {
-      setTyping(false);
       try {
         const data = JSON.parse(event.data);
-        onMessage(data.text);
-      } catch {
-        onMessage(event.data);
+
+        // Handle script execution status
+        if (data.executingScript !== undefined) {
+          setExecutingScript(data.executingScript);
+          return;
+        }
+
+        // Handle errors
+        if (data.error) {
+          console.error('Server error:', data.error);
+          onMessage({
+            text: `Error: ${data.error}`,
+            isComplete: true,
+          });
+          setTyping(false);
+          setExecutingScript(false);
+          return;
+        }
+
+        // Handle messages
+        setTyping(!data.isComplete);
+        onMessage(data);
+      } catch (error) {
+        console.error('Failed to parse message:', error);
+        setTyping(false);
+        setExecutingScript(false);
       }
     };
-    socket.onerror = (err) => console.error('WebSocket error:', err);
+
+    socket.onerror = (err) => {
+      console.error('WebSocket error:', err);
+      setTyping(false);
+      setExecutingScript(false);
+    };
 
     return () => socket.close();
-  }, [onMessage, setTyping]);
+  }, [onMessage, setTyping, setExecutingScript]);
 
   const sendMessage = useCallback(
-    (msg: string) => {
+    (text: string) => {
       setTyping(true);
-      socketRef.current?.send(msg);
+      socketRef.current?.send(JSON.stringify({ text }));
     },
     [setTyping]
   );
@@ -55,34 +91,56 @@ const ChatWindow = ({
 }: ChatWindowProps) => {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [typing, setTyping] = useState(false);
+  const [executingScript, setExecutingScript] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // WebSocket integration
-  const handleBotMessage = useCallback((botMsg: string) => {
-    setMessages((prev) => [...prev, { text: botMsg, isUser: false }]);
+  const handleMessage = useCallback((data: ChatResponse) => {
+    if (data.isComplete) {
+      setMessages((prev) => [
+        ...prev,
+        { text: data.text, isUser: false, isComplete: true },
+      ]);
+    }
   }, []);
-  const sendMessage = useChatSocket(handleBotMessage, setTyping);
+
+  const sendMessage = useChatSocket(
+    handleMessage,
+    setTyping,
+    setExecutingScript
+  );
 
   const handleSendMessage = (text: string) => {
-    setMessages((prev) => [...prev, { text, isUser: true }]);
+    setMessages((prev) => [...prev, { text, isUser: true, isComplete: true }]);
     sendMessage(text);
     if (onSendMessage) onSendMessage(text);
   };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typing]);
+  }, [messages, typing, executingScript]);
 
   return (
     <div className='chat-window'>
       <div className='chat-messages'>
         {messages.map((message, index) => (
-          <ChatBubble key={index} text={message.text} isUser={message.isUser} />
+          <ChatBubble
+            key={`msg-${index}`}
+            text={message.text}
+            isUser={message.isUser}
+          />
         ))}
-        {typing && <ChatBubble text={'...'} isUser={false} />}
+
+        {/* Show loading indicator */}
+        {(typing || executingScript) && (
+          <LoadingBubble type={executingScript ? 'script' : 'default'} />
+        )}
+
         <div ref={messagesEndRef} />
       </div>
-      <ChatInput onSendMessage={handleSendMessage} disabled={typing} />
+      <ChatInput
+        onSendMessage={handleSendMessage}
+        disabled={typing || executingScript}
+      />
     </div>
   );
 };

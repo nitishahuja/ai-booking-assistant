@@ -5,12 +5,13 @@ import { BookingDetails } from '../types/BookingRequest';
 export interface CalendlyResponse {
   success: boolean;
   message: string;
-  actualTime?: string;
   requestedTime: string;
+  selectedTime?: string;
+  isReadyToConfirm?: boolean;
 }
 
 /**
- * Step 1: Check availability using pure LLM reasoning
+ * Phase 1: Check availability and select slot (but don't confirm)
  */
 export async function checkAvailability(
   stagehand: Stagehand,
@@ -19,7 +20,7 @@ export async function checkAvailability(
   const { page } = stagehand;
 
   try {
-    console.log('🤖 Asking LLM to check availability...');
+    console.log('🤖 Phase 1: Checking availability and selecting slot...');
     await page.goto('https://calendly.com/aadhrik-myaifrontdesk/30min', {
       timeout: 45000,
       waitUntil: 'domcontentloaded',
@@ -27,71 +28,62 @@ export async function checkAvailability(
 
     const agent = stagehand.agent();
 
+    // Execute but stop before final confirmation
     const response = await agent.execute(`
       1. Open the calendar on the page.
       2. Go to the date "${bookingDetails.date}".
-      3. Check if there is a time slot around "${bookingDetails.time}".
-      4. If yes, select that time slot.
+      3. Check all available time slots around "${bookingDetails.time}".
+      4. If a suitable slot is found:
+         - Select that time slot
+         - Wait for the booking form to appear
+         - DO NOT click any confirmation buttons
+      5. Return all available times and the selected slot.
     `);
 
-    console.log('✅ LLM agent executed availability logic.');
-    console.log('📝 Raw agent response:', JSON.stringify(response, null, 2));
+    console.log('✅ Phase 1 completed: Slot selected and form ready');
+    console.log('📝 Agent response:', JSON.stringify(response, null, 2));
 
-    // Parse the JSON response once
+    // Parse the response to get available times and selected slot
     let parsedResponse;
+    let selectedTime;
     try {
-      // The response might already be an object, so check first
       if (typeof response === 'string') {
         const responseObj = JSON.parse(response);
-        console.log(
-          '🔍 Parsed string response:',
-          JSON.stringify(responseObj, null, 2)
-        );
-        parsedResponse = responseObj.message || responseObj.answer;
+        parsedResponse = responseObj.answer;
       } else if (response && typeof response === 'object') {
-        // If it's already an object, try to get the content directly
-        console.log(
-          '🔍 Response is already an object:',
-          JSON.stringify(response, null, 2)
-        );
-        if (response.message) {
-          parsedResponse = response.message;
-        } else {
-          const responseStr = JSON.stringify(response);
-          try {
-            const responseObj = JSON.parse(responseStr);
-            parsedResponse = responseObj.message || responseObj.answer;
-          } catch {
-            parsedResponse = responseStr;
-          }
-        }
+        parsedResponse = response.message || JSON.stringify(response);
       } else {
         parsedResponse = String(response);
       }
-      console.log('✨ Extracted message:', parsedResponse);
+
+      // Try to extract the selected time from the response
+      const timeMatch = parsedResponse.match(
+        /selected.*?(\d{1,2}:\d{2}\s*(?:am|pm))/i
+      );
+      if (timeMatch) {
+        selectedTime = timeMatch[1].toLowerCase().replace(/\s+/g, '');
+      }
     } catch (e) {
       console.log('⚠️ Error parsing response:', e);
-      // If parsing fails, try to get a meaningful string representation
-      parsedResponse =
-        typeof response === 'object'
-          ? JSON.stringify(response, null, 2)
-          : String(response);
-      console.log('⚠️ Using fallback response:', parsedResponse);
+      parsedResponse = String(response);
     }
 
-    const result = {
+    // Take a screenshot of the form state
+    try {
+      await page.screenshot({ path: `slot-selected-${Date.now()}.png` });
+    } catch (e) {
+      console.error('Failed to take form screenshot:', e);
+    }
+
+    return {
       success: true,
       message: parsedResponse,
       requestedTime: bookingDetails.time,
+      selectedTime,
+      isReadyToConfirm: true,
     };
-
-    console.log(
-      '🔄 Final result being sent to GPT:',
-      JSON.stringify(result, null, 2)
-    );
-    return result;
   } catch (err: any) {
-    console.error('❌ Error in LLM-based availability check:', err);
+    console.error('❌ Error in availability check:', err);
     return {
       success: false,
       message: err.message || 'Failed to check availability',
@@ -101,59 +93,70 @@ export async function checkAvailability(
 }
 
 /**
- * Step 2: Book appointment using pure LLM interaction
+ * Phase 2: Complete booking from existing form state
  */
 export async function bookAppointment(
   stagehand: Stagehand,
   bookingDetails: BookingDetails
-): Promise<{ success: boolean; message: string }> {
+): Promise<CalendlyResponse> {
   const { page } = stagehand;
 
   try {
-    console.log('📅 Booking confirmed slot via Calendly...');
-    await page.goto('https://calendly.com/aadhrik-myaifrontdesk/30min', {
-      timeout: 45000,
-      waitUntil: 'domcontentloaded',
-    });
+    console.log('🤖 Phase 2: Completing booking from existing form...');
 
+    // The form should already be open from Phase 1
+    // Just fill in details and confirm
     const agent = stagehand.agent();
-    // After the agent executes the booking
-    await agent.execute(`
-      1. Open the calendar and go to the date "${bookingDetails.date}".
-      2. Select the time slot closest to "${bookingDetails.time}".
-      3. Wait for the form asking for name and email to load.
-      4. Enter the name: "${bookingDetails.name}".
-      5. Enter the email: "${bookingDetails.email}".
-      6. Click the "Schedule Event" or equivalent confirmation button.
-      7. Wait until you see a confirmation message or success screen.
+    const response = await agent.execute(`
+      1. The booking form should already be open.
+      2. Enter the name: "${bookingDetails.name}".
+      3. Enter the email: "${bookingDetails.email}".
+      4. Click the "Schedule Event" or equivalent confirmation button.
+      5. Wait for the confirmation page or success message.
     `);
 
-    // Try to extract confirmation time text from the final screen
-    const confirmedText = await page.textContent('body');
+    console.log('✅ Phase 2 completed: Booking confirmed');
 
-    // Fallback if we can't extract exact time
-    let confirmedTime = 'the selected time';
-    const match = confirmedText?.match(
-      /(?:at|for)\s+(\d{1,2}:\d{2}\s?[apAP][mM])/
-    );
-    if (match && match[1]) {
-      confirmedTime = match[1];
+    // Take a screenshot of the confirmation
+    try {
+      await page.screenshot({ path: `booking-confirmed-${Date.now()}.png` });
+    } catch (e) {
+      console.error('Failed to take confirmation screenshot:', e);
     }
 
-    console.log('✅ Booking flow executed by LLM agent');
+    // Try to extract confirmation time from the page
+    let confirmedTime = bookingDetails.time;
+    try {
+      const confirmationText = await page.textContent('body');
+      const timeMatch = confirmationText?.match(
+        /(?:scheduled|confirmed|booked).*?(\d{1,2}:\d{2}\s*[AaPp][Mm])/i
+      );
+      if (timeMatch) {
+        confirmedTime = timeMatch[1];
+      }
+    } catch (e) {
+      console.error('Failed to extract confirmation time:', e);
+    }
+
     return {
       success: true,
-      message: `Scheduled on ${bookingDetails.date} at ${confirmedTime}`,
+      message: `Successfully booked for ${bookingDetails.date} at ${confirmedTime}`,
+      requestedTime: bookingDetails.time,
     };
   } catch (error: any) {
     console.error('❌ Error during booking:', error);
-    await page.screenshot({
-      path: `calendly-booking-error-${Date.now()}.png`,
-    });
+
+    // Take error screenshot
+    try {
+      await page.screenshot({ path: `booking-error-${Date.now()}.png` });
+    } catch (e) {
+      console.error('Failed to take error screenshot:', e);
+    }
 
     return {
       success: false,
       message: `Booking failed: ${error.message || error}`,
+      requestedTime: bookingDetails.time,
     };
   }
 }

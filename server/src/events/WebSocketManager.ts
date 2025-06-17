@@ -1,4 +1,5 @@
-import WebSocket from 'ws';
+import { WebSocket } from 'ws';
+import { GPTService } from '../services/GPTService';
 import {
   ServerEventType,
   ClientEventType,
@@ -8,117 +9,122 @@ import {
 } from './types';
 import { BookingDetails } from '../types/BookingRequest';
 
+export type SessionState =
+  | 'idle'
+  | 'checking'
+  | 'awaiting_confirmation'
+  | 'booking'
+  | 'completed'
+  | 'error';
+
 export class WebSocketManager {
-  protected ws: WebSocket;
-  private eventHandlers: Map<
-    ClientEventType,
-    ((payload: any) => Promise<void>)[]
-  >;
+  private sessions = new Map<WebSocket, GPTService>();
+  private readonly CLEANUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    this.eventHandlers = new Map();
-    this.setupMessageHandler();
+  constructor() {
+    // Periodically cleanup inactive sessions
+    setInterval(() => this.cleanupInactiveSessions(), this.CLEANUP_INTERVAL);
   }
 
-  public getWebSocket(): WebSocket {
-    return this.ws;
-  }
+  public handleConnection(ws: WebSocket): void {
+    console.log('🔌 New WebSocket connection established');
+    const gptService = new GPTService(ws);
+    this.sessions.set(ws, gptService);
 
-  private setupMessageHandler() {
-    this.ws.on('message', async (data: string) => {
+    // Initialize the session immediately
+    gptService.initializeSession().catch((error) => {
+      console.error('Failed to initialize session:', error);
+      ws.send(
+        JSON.stringify({
+          error: 'Failed to initialize session',
+          details: error.message,
+        })
+      );
+    });
+
+    ws.on('message', async (message: string) => {
       try {
-        console.log('📩 Received raw message:', data.toString());
+        const data = JSON.parse(message);
+        const text = data.text || data.toString();
 
-        // Try to parse as JSON first
-        let event;
-        try {
-          event = JSON.parse(data.toString());
-          console.log('📨 Parsed as JSON:', event);
-        } catch (e) {
-          // If not JSON, treat as plain text message
-          event = {
-            type: ClientEventType.MESSAGE,
-            payload: { text: data.toString() },
-          };
-          console.log('📝 Treating as plain text message:', event);
-        }
-
-        // Validate event structure
-        if (
-          !event.type ||
-          !Object.values(ClientEventType).includes(event.type)
-        ) {
-          // If no valid type, treat as plain message
-          event = {
-            type: ClientEventType.MESSAGE,
-            payload: { text: data.toString() },
-          };
-        }
-
-        const handlers = this.eventHandlers.get(event.type as ClientEventType);
-        if (handlers) {
-          for (const handler of handlers) {
-            await handler(event.payload);
-          }
-        }
-      } catch (err) {
-        console.error('❌ Error handling message:', err);
-        this.emitError('Failed to process message');
+        await gptService.processMessage(text);
+      } catch (error) {
+        console.error('❌ Error handling message:', error);
+        ws.send(
+          JSON.stringify({
+            error:
+              error instanceof Error ? error.message : 'Unknown error occurred',
+          })
+        );
       }
     });
 
-    // Add connection error handler
-    this.ws.on('error', (error) => {
-      console.error('❌ WebSocket error:', error);
+    ws.on('close', () => {
+      console.log('🔌 WebSocket connection closed');
+      this.cleanupSession(ws);
     });
+
+    ws.on('error', (error) => {
+      console.error('❌ WebSocket error:', error);
+      this.cleanupSession(ws);
+    });
+  }
+
+  private cleanupSession(ws: WebSocket): void {
+    const service = this.sessions.get(ws);
+    if (service) {
+      service.cleanup();
+      this.sessions.delete(ws);
+    }
+  }
+
+  private cleanupInactiveSessions(): void {
+    const now = Date.now();
+    for (const [ws, service] of this.sessions.entries()) {
+      const lastUsed = service.getLastUsed();
+      if (now - lastUsed > this.CLEANUP_INTERVAL) {
+        console.log('🧹 Cleaning up inactive session');
+        this.cleanupSession(ws);
+      }
+    }
+  }
+
+  public getWebSocket(): WebSocket {
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public on<T extends ClientEventType>(
     event: T,
     handler: (payload: ClientEvents[T]) => Promise<void>
   ) {
-    const handlers = this.eventHandlers.get(event) || [];
-    handlers.push(handler);
-    this.eventHandlers.set(event, handlers);
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   private sendMessage(data: any) {
-    if (this.ws.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify(data);
-      console.log('📤 Sending message:', message);
-      this.ws.send(message);
-    } else {
-      console.warn('⚠️ WebSocket not open, message not sent');
-    }
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emit<T extends ServerEventType>(event: ServerEventPayload<T>) {
-    this.sendMessage(event);
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emitMessage(text: string) {
-    // For compatibility with existing clients, send simple format
-    this.sendMessage({
-      sender: 'bot',
-      text: text,
-    });
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emitError(message: string) {
-    this.sendMessage({
-      sender: 'bot',
-      text: `Error: ${message}`,
-      error: true,
-    });
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emitBookingValidationError(errors: string[]) {
-    this.sendMessage({
-      sender: 'bot',
-      text: `Validation errors:\n${errors.join('\n')}`,
-      error: true,
-    });
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emitBookingAvailability(
@@ -126,30 +132,17 @@ export class WebSocketManager {
     details?: BookingDetails,
     message?: string
   ) {
-    this.sendMessage({
-      sender: 'bot',
-      text:
-        message ||
-        (available
-          ? `That time is available! Should I confirm this?`
-          : 'Sorry, that time appears to be unavailable. Could you please suggest a different time?'),
-      bookingDetails: details,
-    });
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emitBookingConfirmed(success: boolean, message: string) {
-    this.sendMessage({
-      sender: 'bot',
-      text: message,
-      success: success,
-    });
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 
   public emitFunctionResult(name: string, result: any) {
-    this.sendMessage({
-      sender: 'bot',
-      text: `Function ${name} result: ${JSON.stringify(result)}`,
-      functionResult: { name, result },
-    });
+    // Implementation needed
+    throw new Error('Method not implemented');
   }
 }
