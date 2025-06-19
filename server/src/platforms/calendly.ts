@@ -8,6 +8,7 @@ export interface CalendlyResponse {
   requestedTime: string;
   selectedTime?: string;
   isReadyToConfirm?: boolean;
+  missingFields?: { label: string; required: boolean }[];
 }
 
 /**
@@ -31,13 +32,9 @@ export async function checkAvailability(
     // Execute but stop before final confirmation
     const response = await agent.execute(`
       1. Open the calendar on the page.
-      2. Go to the date "${bookingDetails.date}".
+      2. Go to the date "${bookingDetails.date} and if the date is not available then return all available nearest dates".
       3. Check all available time slots around "${bookingDetails.time}".
-      4. If a suitable slot is found:
-         - Select that time slot
-         - Wait for the booking form to appear
-         - DO NOT click any confirmation buttons
-      5. Return all available times and the selected slot.
+      5. Return all available times.
     `);
 
     console.log('✅ Phase 1 completed: Slot selected and form ready');
@@ -109,11 +106,44 @@ export async function bookAppointment(
     const agent = stagehand.agent();
     const response = await agent.execute(`
       1. The booking form should already be open.
-      2. Enter the name: "${bookingDetails.name}".
-      3. Enter the email: "${bookingDetails.email}".
-      4. Click the "Schedule Event" or equivalent confirmation button.
-      5. Wait for the confirmation page or success message.
+      2. Finally select the time slot "${bookingDetails.time}".
+      3. click on the time slot "${bookingDetails.time}".
+      4. It should open the confirmation page.
+      5. Look at ALL form fields (both required and optional) and their current state.
+      6. For each empty field, return it in this format:
+         FIELD: "field label here"
+         REQUIRED: yes/no
+      7. If no empty fields, proceed with:
+         - Enter the name: "${bookingDetails.name}"
+         - Enter the email: "${bookingDetails.email}"
+         - Click the "Schedule Event" button
+         - Wait for confirmation
     `);
+
+    // Check for missing fields in the response
+    const responseStr =
+      typeof response === 'string' ? response : JSON.stringify(response);
+    const fieldMatches = responseStr.match(
+      /FIELD:\s*"([^"]+)"\s*\nREQUIRED:\s*(yes|no)/gi
+    );
+
+    if (fieldMatches) {
+      const missingFields = fieldMatches.map((match) => {
+        const fieldMatch = match.match(/FIELD:\s*"([^"]+)"/i);
+        const requiredMatch = match.match(/REQUIRED:\s*(yes|no)/i);
+        return {
+          label: fieldMatch?.[1] || '',
+          required: requiredMatch?.[1].toLowerCase() === 'yes',
+        };
+      });
+
+      return {
+        success: false,
+        message: 'Additional fields needed',
+        requestedTime: bookingDetails.time,
+        missingFields,
+      };
+    }
 
     console.log('✅ Phase 2 completed: Booking confirmed');
 

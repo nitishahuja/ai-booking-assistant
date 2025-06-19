@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import { EventEmitter } from 'events';
 import { BrowserAgent } from '../agent/stagehandAgent';
 import * as calendly from '../platforms/calendly';
+import * as housecallpro from '../platforms/housecallpro';
 import { tools, availableFunctions } from '../functions/manifest';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import dotenv from 'dotenv';
@@ -26,9 +27,13 @@ interface BookingDetails {
   time?: string;
   name?: string;
   email?: string;
-  foundSlot?: string;
+  phone?: string;
+  address?: string;
+  service?: string;
+  platform: 'calendly' | 'housecallpro';
   selectedTime?: string;
   isReadyToConfirm?: boolean;
+  customFields?: { [key: string]: string };
 }
 
 interface AgentSession {
@@ -122,7 +127,9 @@ export class GPTService extends EventEmitter {
         state: 'idle',
         lastUsed: Date.now(),
         timeoutId,
-        bookingDetails: {},
+        bookingDetails: {
+          platform: 'calendly', // Default platform
+        },
       };
 
       this.agents.set(this.ws, session);
@@ -142,29 +149,29 @@ export class GPTService extends EventEmitter {
 
   private async cleanupAgentSession(ws: WebSocket) {
     const session = this.agents.get(ws);
-    if (session) {
-      console.log('🧹 Cleaning up session:', {
-        state: session.state,
-        lastUsed: new Date(session.lastUsed).toISOString(),
-        bookingDetails: session.bookingDetails,
-      });
+    if (!session) return;
 
-      // Take final screenshot if in an interesting state
-      if (session.state !== 'idle' && session.state !== 'completed') {
-        try {
-          const timestamp = Date.now();
-          const path = `cleanup-${timestamp}.png`;
-          await session.agent.getStagehand().page.screenshot({ path });
-          console.log('📸 Final state screenshot saved:', path);
-        } catch (error) {
-          console.error('Failed to take cleanup screenshot:', error);
-        }
+    console.log('🧹 Cleaning up session:', {
+      state: session.state,
+      lastUsed: new Date(session.lastUsed).toISOString(),
+      bookingDetails: session.bookingDetails,
+    });
+
+    // Take final screenshot if in an interesting state
+    if (session.state !== 'idle' && session.state !== 'completed') {
+      try {
+        const timestamp = Date.now();
+        const path = `cleanup-${timestamp}.png`;
+        await session.agent.getStagehand().page.screenshot({ path });
+        console.log('📸 Final state screenshot saved:', path);
+      } catch (error) {
+        console.error('Failed to take cleanup screenshot:', error);
       }
-
-      clearTimeout(session.timeoutId);
-      await session.agent.close();
-      this.agents.delete(ws);
     }
+
+    clearTimeout(session.timeoutId);
+    await session.agent.close();
+    this.agents.delete(ws);
   }
 
   private sendMessage(data: any) {
@@ -192,19 +199,32 @@ export class GPTService extends EventEmitter {
     const initialHistory: ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `You are an AI booking assistant that helps users schedule meetings via Calendly. Keep responses brief and natural. Ask one question at a time. Don't make assumptions about dates or times - always ask for clarification if needed.
+        content: `You are an AI booking assistant that helps users schedule appointments via Calendly and Housecall Pro. Keep responses brief and natural. Ask one question at a time.
 
-Key Tasks:
-- Collect name, email, preferred date and time
-- Validate dates and check availability
-- Show all available options if requested time isn't free
-- Only book after user confirms a specific available time
+Platform-Specific Flows:
+1. For Calendly (Meetings):
+   - Collect: name, email, preferred date and time
+   - Check availability for requested time
+   - Show alternatives if requested time isn't available
+   - Only book after user confirms a specific available time
+
+2. For Housecall Pro (Services):
+   - Collect in this order:
+     a. Full name
+     b. Email
+     c. Phone number
+     d. Service details (type of service, specific problem)
+     e. Complete service address
+   - DO NOT ask for date/time preferences
+   - Once all information is collected, proceed with booking
+   - If the form needs additional information, ask for it
 
 Important:
-- Never assume a time is available without checking
-- Always show ALL available options
-- Wait for explicit time selection before booking
-- Keep the conversation friendly and efficient`,
+- For Calendly: Never assume a time is available without checking
+- For Housecall Pro: Focus on service details and contact information
+- Keep the conversation friendly and efficient
+- Ask for information one piece at a time
+- If you're unsure about service categorization, ask for more details`,
       },
     ];
 
@@ -212,7 +232,7 @@ Important:
 
     // Send initial greeting
     const greeting =
-      "Hi! I'd be happy to help you schedule a meeting. Would you like to book one now?";
+      "Hi! I'd be happy to help you schedule an appointment. Would you like to book through Calendly for a meeting, or Housecall Pro for a service?";
     this.sendResponse(greeting, true);
 
     // Add greeting to history
@@ -332,7 +352,18 @@ Important:
       ...session.bookingDetails,
       date: args.date,
       time: args.time,
+      platform: args.platform || 'calendly',
     };
+
+    // Skip availability check for Housecall Pro
+    if (session.bookingDetails.platform === 'housecallpro') {
+      return {
+        success: true,
+        message:
+          'No availability check needed for Housecall Pro. Please proceed with booking.',
+        needsMoreInfo: false,
+      };
+    }
 
     const result = await calendly.checkAvailability(
       session.agent.getStagehand(),
@@ -359,26 +390,87 @@ Important:
   }
 
   private async handleBooking(session: AgentSession, args: any) {
-    if (!session.bookingDetails.isReadyToConfirm) {
-      throw new Error(
-        'No slot is ready for booking. Please check availability first.'
+    session.state = 'booking';
+
+    // Validate required fields based on platform
+    if (args.platform === 'housecallpro') {
+      // For Housecall Pro, we only validate basic info first
+      if (!args.name || !args.email) {
+        return {
+          success: false,
+          message: 'Missing required booking information',
+          needsMoreInfo: true,
+          missingFields: [
+            ...(!args.name ? [{ label: 'Name', required: true }] : []),
+            ...(!args.email ? [{ label: 'Email', required: true }] : []),
+          ],
+        };
+      }
+    } else {
+      // For Calendly, we need all appointment details
+      if (!args.name || !args.email || !args.date || !args.time) {
+        return {
+          success: false,
+          message: 'Missing required booking information',
+          needsMoreInfo: true,
+          missingFields: [
+            ...(!args.name ? [{ label: 'Name', required: true }] : []),
+            ...(!args.email ? [{ label: 'Email', required: true }] : []),
+            ...(!args.date ? [{ label: 'Date', required: true }] : []),
+            ...(!args.time ? [{ label: 'Time', required: true }] : []),
+          ],
+        };
+      }
+    }
+
+    // Now we know we have the basic required fields
+    const bookingDetails = {
+      name: args.name,
+      email: args.email,
+      platform: args.platform || 'calendly',
+      ...(args.date && { date: args.date }),
+      ...(args.time && { time: args.time }),
+      ...(args.serviceCategory && { serviceCategory: args.serviceCategory }),
+      ...(args.serviceType && { serviceType: args.serviceType }),
+      ...(args.serviceDetails && { serviceDetails: args.serviceDetails }),
+      ...(args.phone && { phone: args.phone }),
+      ...(args.address && { address: args.address }),
+      ...(args.customFields && { customFields: args.customFields }),
+    } as const;
+
+    session.bookingDetails = bookingDetails;
+
+    let result;
+    if (bookingDetails.platform === 'housecallpro') {
+      result = await housecallpro.bookAppointment(
+        session.agent.getStagehand(),
+        bookingDetails
+      );
+    } else {
+      result = await calendly.bookAppointment(
+        session.agent.getStagehand(),
+        bookingDetails
       );
     }
 
-    session.state = 'booking';
-    session.bookingDetails = {
-      ...session.bookingDetails,
-      name: args.name,
-      email: args.email,
-    };
-
-    const result = await calendly.bookAppointment(
-      session.agent.getStagehand(),
-      args
-    );
+    // If we need additional fields, let GPT handle asking for them
+    if (!result.success && result.missingFields) {
+      return {
+        success: false,
+        needsMoreInfo: true,
+        message: result.message,
+        missingFields: result.missingFields,
+      };
+    }
 
     session.state = result.success ? 'completed' : 'error';
-    await this.cleanupAgentSession(this.ws);
+
+    if (!result.success) {
+      await this.cleanupAgentSession(this.ws);
+    } else {
+      // Clean up after successful booking
+      await this.cleanupAgentSession(this.ws);
+    }
 
     return result;
   }

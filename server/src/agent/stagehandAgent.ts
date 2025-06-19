@@ -24,7 +24,7 @@ export class BrowserAgent {
         verbose: 2,
         domSettleTimeoutMs: 60000,
         enableCaching: true,
-        modelName: 'gpt-4.1',
+        modelName: 'gpt-4.1-mini',
         modelClientOptions: {
           apiKey: process.env.OPENAI_API_KEY,
         },
