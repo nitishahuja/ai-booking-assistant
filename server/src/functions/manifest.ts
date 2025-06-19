@@ -131,19 +131,19 @@ const tools: ExtendedChatCompletionTool[] = [
           },
           platform: {
             type: 'string',
-            enum: ['calendly', 'housecallpro'],
+            enum: ['calendly', 'housecallpro', 'opentable'],
             description: 'The booking platform to use',
           },
           // Optional parameters based on platform
           date: {
             type: 'string',
             description:
-              'Date for the booking in YYYY-MM-DD format (required for Calendly)',
+              'Date for the booking in YYYY-MM-DD format (required for Calendly and OpenTable)',
           },
           time: {
             type: 'string',
             description:
-              'Time for the booking in HH:mm format (24-hour) (required for Calendly)',
+              'Time for the booking in HH:mm format (24-hour) (required for Calendly and OpenTable)',
           },
           serviceCategory: {
             type: 'string',
@@ -162,11 +162,26 @@ const tools: ExtendedChatCompletionTool[] = [
           },
           phone: {
             type: 'string',
-            description: 'Phone number (required for Housecall Pro)',
+            description:
+              'Phone number (required for Housecall Pro and OpenTable)',
           },
           address: {
             type: 'string',
             description: 'Service address (required for Housecall Pro)',
+          },
+          // OpenTable specific parameters
+          partySize: {
+            type: 'number',
+            description: 'Number of guests for OpenTable reservation',
+          },
+          occasion: {
+            type: 'string',
+            description:
+              'Special occasion (Birthday, Anniversary, etc.) for OpenTable',
+          },
+          specialRequests: {
+            type: 'string',
+            description: 'Special requests or notes for OpenTable reservation',
           },
           customFields: {
             type: 'object',
@@ -178,12 +193,33 @@ const tools: ExtendedChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'submitOTP',
+      say: 'I will submit the OTP code for verification.',
+      description: 'Submit OTP code for OpenTable verification',
+      parameters: {
+        type: 'object',
+        properties: {
+          otp: {
+            type: 'string',
+            description: 'The OTP code received by the user',
+          },
+        },
+        required: ['otp'],
+      },
+    },
+  },
 ] as const;
 
 // Import all functions included in function manifest
 const availableFunctions: { [key: string]: Function } = {
   normalizeBookingDate: require('./dateUtils').normalizeBookingDate,
   validateBookingDetails: require('./validateBooking').validateBookingDetails,
+  checkAvailability: require('../platforms/opentable').checkAvailability,
+  bookAppointment: require('../platforms/opentable').bookAppointment,
+  submitOTP: require('../platforms/opentable').submitOTP,
 };
 
 export { tools, availableFunctions, ExtendedChatCompletionTool };

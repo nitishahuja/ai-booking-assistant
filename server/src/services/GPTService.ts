@@ -4,6 +4,8 @@ import { EventEmitter } from 'events';
 import { BrowserAgent } from '../agent/stagehandAgent';
 import * as calendly from '../platforms/calendly';
 import * as housecallpro from '../platforms/housecallpro';
+import * as opentable from '../platforms/opentable';
+import type { OpenTableResponse } from '../platforms/opentable';
 import { tools, availableFunctions } from '../functions/manifest';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import dotenv from 'dotenv';
@@ -30,10 +32,13 @@ interface BookingDetails {
   phone?: string;
   address?: string;
   service?: string;
-  platform: 'calendly' | 'housecallpro';
+  platform: 'calendly' | 'housecallpro' | 'opentable';
   selectedTime?: string;
   isReadyToConfirm?: boolean;
   customFields?: { [key: string]: string };
+  partySize?: number;
+  occasion?: string;
+  specialRequests?: string;
 }
 
 interface AgentSession {
@@ -43,6 +48,7 @@ interface AgentSession {
   timeoutId: NodeJS.Timeout;
   bookingDetails: BookingDetails;
   screenshotPath?: string;
+  otpEmitter?: EventEmitter;
 }
 
 export class GPTService extends EventEmitter {
@@ -199,7 +205,7 @@ export class GPTService extends EventEmitter {
     const initialHistory: ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `You are an AI booking assistant that helps users schedule appointments via Calendly and Housecall Pro. Keep responses brief and natural. Ask one question at a time.
+        content: `You are an AI booking assistant that helps users schedule appointments via Calendly, Housecall Pro, and OpenTable. Keep responses brief and natural. Ask one question at a time.
 
 Platform-Specific Flows:
 1. For Calendly (Meetings):
@@ -219,12 +225,27 @@ Platform-Specific Flows:
    - Once all information is collected, proceed with booking
    - If the form needs additional information, ask for it
 
+3. For OpenTable (Restaurant Reservations):
+   - Collect in this order:
+     a. Full name
+     b. Email
+     c. Phone number
+     d. Party size
+     e. Preferred date and time
+   - Check availability for requested time
+   - Optional: Ask about special occasions or requests
+   - When OTP is needed:
+     a. Tell user to check their phone/email
+     b. Ask them to provide the OTP
+     c. Keep the session active while waiting
+
 Important:
 - For Calendly: Never assume a time is available without checking
 - For Housecall Pro: Focus on service details and contact information
+- For OpenTable: Handle OTP verification smoothly
 - Keep the conversation friendly and efficient
 - Ask for information one piece at a time
-- If you're unsure about service categorization, ask for more details`,
+- If you're unsure about any details, ask for clarification`,
       },
     ];
 
@@ -232,7 +253,11 @@ Important:
 
     // Send initial greeting
     const greeting =
-      "Hi! I'd be happy to help you schedule an appointment. Would you like to book through Calendly for a meeting, or Housecall Pro for a service?";
+      "Hi! I'd be happy to help you schedule an appointment or make a reservation. Would you like to:\n" +
+      '1. Book a meeting through Calendly\n' +
+      '2. Schedule a service through Housecall Pro\n' +
+      '3. Make a restaurant reservation through OpenTable\n' +
+      '\nJust let me know which option you prefer!';
     this.sendResponse(greeting, true);
 
     // Add greeting to history
@@ -292,7 +317,8 @@ Important:
             let result;
             if (
               functionName === 'checkAvailability' ||
-              functionName === 'bookAppointment'
+              functionName === 'bookAppointment' ||
+              functionName === 'submitOTP'
             ) {
               try {
                 const session = await this.getOrCreateAgent();
@@ -303,11 +329,51 @@ Important:
                     session,
                     JSON.parse(functionArgs)
                   );
-                } else {
+                } else if (functionName === 'bookAppointment') {
                   result = await this.handleBooking(
                     session,
                     JSON.parse(functionArgs)
                   );
+                } else {
+                  // Handle submitOTP
+                  const { otp } = JSON.parse(functionArgs);
+                  const { name, email, phone, date, time, platform } =
+                    session.bookingDetails;
+
+                  // Ensure we have all required fields
+                  if (
+                    !name ||
+                    !email ||
+                    !phone ||
+                    !date ||
+                    !time ||
+                    platform !== 'opentable'
+                  ) {
+                    throw new Error(
+                      'Missing required booking information for OTP submission'
+                    );
+                  }
+
+                  result = await opentable.submitOTP(
+                    session.agent.getStagehand(),
+                    {
+                      name,
+                      email,
+                      phone,
+                      date,
+                      time,
+                      platform: 'opentable',
+                      partySize: session.bookingDetails.partySize,
+                      occasion: session.bookingDetails.occasion,
+                      specialRequests: session.bookingDetails.specialRequests,
+                    },
+                    otp
+                  );
+
+                  if (result.success) {
+                    session.state = 'completed';
+                    await this.cleanupAgentSession(this.ws);
+                  }
                 }
 
                 this.setScriptExecutionStatus(false);
@@ -365,10 +431,18 @@ Important:
       };
     }
 
-    const result = await calendly.checkAvailability(
-      session.agent.getStagehand(),
-      args
-    );
+    let result;
+    if (session.bookingDetails.platform === 'opentable') {
+      result = await opentable.checkAvailability(
+        session.agent.getStagehand(),
+        args
+      );
+    } else {
+      result = await calendly.checkAvailability(
+        session.agent.getStagehand(),
+        args
+      );
+    }
 
     if (result.success && result.isReadyToConfirm) {
       session.state = 'awaiting_confirmation';
@@ -406,6 +480,20 @@ Important:
           ],
         };
       }
+    } else if (args.platform === 'opentable') {
+      // For OpenTable, we need basic info first
+      if (!args.name || !args.email || !args.phone) {
+        return {
+          success: false,
+          message: 'Missing required booking information',
+          needsMoreInfo: true,
+          missingFields: [
+            ...(!args.name ? [{ label: 'Name', required: true }] : []),
+            ...(!args.email ? [{ label: 'Email', required: true }] : []),
+            ...(!args.phone ? [{ label: 'Phone Number', required: true }] : []),
+          ],
+        };
+      }
     } else {
       // For Calendly, we need all appointment details
       if (!args.name || !args.email || !args.date || !args.time) {
@@ -436,6 +524,10 @@ Important:
       ...(args.phone && { phone: args.phone }),
       ...(args.address && { address: args.address }),
       ...(args.customFields && { customFields: args.customFields }),
+      // OpenTable specific fields
+      ...(args.partySize && { partySize: args.partySize }),
+      ...(args.occasion && { occasion: args.occasion }),
+      ...(args.specialRequests && { specialRequests: args.specialRequests }),
     } as const;
 
     session.bookingDetails = bookingDetails;
@@ -446,6 +538,39 @@ Important:
         session.agent.getStagehand(),
         bookingDetails
       );
+    } else if (bookingDetails.platform === 'opentable') {
+      // Create OTP emitter if it doesn't exist
+      if (!session.otpEmitter) {
+        session.otpEmitter = new EventEmitter();
+      }
+
+      // Set up listener for OTP request
+      const otpRequestPromise = new Promise<OpenTableResponse>((resolve) => {
+        session.otpEmitter?.once('needsOTP', resolve);
+      });
+
+      // Start the booking process
+      const bookingPromise = opentable.bookAppointment(
+        session.agent.getStagehand(),
+        bookingDetails,
+        session.otpEmitter!
+      );
+
+      // Wait for either booking completion or OTP request
+      const result = await Promise.race([bookingPromise, otpRequestPromise]);
+
+      // If we need OTP, don't clean up the session
+      if (result.needsOTP) {
+        session.state = 'awaiting_confirmation';
+        return result;
+      }
+
+      // For other results, proceed with normal cleanup
+      session.state = result.success ? 'completed' : 'error';
+      if (!result.needsOTP) {
+        await this.cleanupAgentSession(this.ws);
+      }
+      return result;
     } else {
       result = await calendly.bookAppointment(
         session.agent.getStagehand(),
@@ -453,25 +578,25 @@ Important:
       );
     }
 
-    // If we need additional fields, let GPT handle asking for them
-    if (!result.success && result.missingFields) {
-      return {
-        success: false,
-        needsMoreInfo: true,
-        message: result.message,
-        missingFields: result.missingFields,
-      };
+    // If we need additional fields or OTP, let GPT handle asking for them
+    if (!result.success && (result.missingFields || result.needsOTP)) {
+      // Don't clean up session if we need OTP
+      if (!result.needsOTP) {
+        await this.cleanupAgentSession(this.ws);
+      }
+
+      // Return the raw result to let GPT handle the communication
+      return result;
     }
 
     session.state = result.success ? 'completed' : 'error';
 
-    if (!result.success) {
-      await this.cleanupAgentSession(this.ws);
-    } else {
-      // Clean up after successful booking
+    // Only clean up if we're done (success or error, but not OTP waiting)
+    if (result.success || (!result.success && !result.needsOTP)) {
       await this.cleanupAgentSession(this.ws);
     }
 
+    // Return the raw result to let GPT handle the communication
     return result;
   }
 
@@ -512,5 +637,46 @@ Important:
       }
       this.agent = null;
     }
+  }
+
+  // Add method to handle OTP submission
+  public async submitOTP(otp: string) {
+    const session = this.agents.get(this.ws);
+    if (!session) {
+      throw new Error('No active session waiting for OTP');
+    }
+
+    if (session.bookingDetails.platform === 'opentable') {
+      // Ensure we have all required fields
+      const { name, email, phone } = session.bookingDetails;
+      if (!name || !email || !phone) {
+        throw new Error('Missing required booking information');
+      }
+
+      const result = await opentable.submitOTP(
+        session.agent.getStagehand(),
+        {
+          name,
+          email,
+          phone,
+          platform: 'opentable',
+          date: session.bookingDetails.date || '',
+          time: session.bookingDetails.time || '',
+          partySize: session.bookingDetails.partySize,
+          occasion: session.bookingDetails.occasion,
+          specialRequests: session.bookingDetails.specialRequests,
+        },
+        otp
+      );
+
+      if (result.success) {
+        session.state = 'completed';
+        await this.cleanupAgentSession(this.ws);
+      }
+
+      return result;
+    }
+
+    throw new Error('Current session does not support OTP');
   }
 }

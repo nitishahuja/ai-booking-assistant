@@ -4,11 +4,13 @@ import { BookingDetails } from '../types/BookingRequest';
 
 export interface CalendlyResponse {
   success: boolean;
-  message: string;
+  message?: string;
   requestedTime: string;
   selectedTime?: string;
   isReadyToConfirm?: boolean;
   missingFields?: { label: string; required: boolean }[];
+  needsOTP?: boolean;
+  error?: string;
 }
 
 /**

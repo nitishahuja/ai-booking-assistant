@@ -3,9 +3,11 @@ import { BookingDetails } from '../types/BookingRequest';
 
 export interface HousecallProResponse {
   success: boolean;
-  message: string;
+  message?: string;
   missingFields?: { label: string; required: boolean }[];
   needsMoreInfo?: boolean;
+  needsOTP?: boolean;
+  error?: string;
 }
 
 /**
