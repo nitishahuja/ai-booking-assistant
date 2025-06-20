@@ -112,10 +112,6 @@ export async function bookAppointment(
       3. click on the time slot "${bookingDetails.time}".
       4. It should open the confirmation page.
       5. Look at ALL form fields (both required and optional) and their current state.
-      6. For each empty field, return it in this format:
-         FIELD: "field label here"
-         REQUIRED: yes/no
-      7. If no empty fields, proceed with:
          - Enter the name: "${bookingDetails.name}"
          - Enter the email: "${bookingDetails.email}"
          - Click the "Schedule Event" button

@@ -324,3 +324,92 @@ interface BookingResponse {
    - Enable caching for repeated operations
    - Configure appropriate timeouts
    - Monitor memory usage
+
+## 📝 Environment Variables Setup
+
+### Server Configuration (.env in /server)
+
+```env
+# Required Variables
+OPENAI_API_KEY=sk-your-openai-api-key-here    # Your OpenAI API key for GPT integration
+PORT=3001                                      # Server port (default: 3001)
+HEADLESS=true                                  # Browser automation mode (true/false)
+
+# Optional Variables
+NODE_ENV=development                           # Environment (development/production)
+DEBUG_SCREENSHOTS=true                         # Enable/disable debug screenshots
+DOM_SETTLE_TIMEOUT=60000                      # Timeout for page interactions (ms)
+ENABLE_CACHING=true                           # Enable Stagehand caching
+MODEL_NAME=gpt-4.1-mini                       # GPT model selection
+
+# Platform-Specific URLs (if you need to override defaults)
+CALENDLY_URL=https://calendly.com/your-url    # Your Calendly booking URL
+OPENTABLE_URL=https://www.opentable.com/...   # Your OpenTable restaurant URL
+HCP_URL=https://book.housecallpro.com/...     # Your HouseCall Pro booking URL
+```
+
+### Client Configuration (.env in /client)
+
+```env
+# Required Variables
+VITE_WS_URL=ws://localhost:3001/ws            # WebSocket connection URL
+
+# Optional Variables
+VITE_APP_NAME="AI FrontDesk"                  # Application name
+VITE_DEBUG_MODE=false                         # Enable debug features
+```
+
+### Environment Variables Guide
+
+1. **OPENAI_API_KEY**
+
+   - Required for GPT integration
+   - Obtain from [OpenAI Platform](https://platform.openai.com/api-keys)
+   - Format: `sk-...`
+
+2. **HEADLESS Mode**
+
+   - `true`: Run browsers in background (production)
+   - `false`: Show browser automation (development/debugging)
+
+3. **Debug Settings**
+
+   - `DEBUG_SCREENSHOTS`: Saves interaction screenshots
+   - `DOM_SETTLE_TIMEOUT`: Adjust for slower connections
+   - `ENABLE_CACHING`: Improves performance but uses more memory
+
+4. **Platform URLs**
+   - Override default booking URLs if needed
+   - Must include complete URL with any necessary parameters
+   - Optional - defaults provided in platform modules
+
+### Security Notes
+
+- Never commit `.env` files to version control
+- Keep API keys secure and rotate regularly
+- Use different keys for development and production
+- Consider using a secrets manager in production
+
+### Troubleshooting
+
+Common environment issues:
+
+1. **OpenAI API Issues**
+
+   ```bash
+   Error: OpenAI API key not found
+   Solution: Check OPENAI_API_KEY in .env
+   ```
+
+2. **WebSocket Connection**
+
+   ```bash
+   Error: Unable to connect to WebSocket
+   Solution: Verify PORT and VITE_WS_URL match
+   ```
+
+3. **Browser Automation**
+   ```bash
+   Error: Browser launch failed
+   Solution: Try HEADLESS=false for debugging
+   ```
