@@ -25,14 +25,14 @@ function App() {
   return (
     <div className='app-container'>
       <header className='app-header'>
-        <h1>AI Booking Assistant</h1>
-        <p>Your personal concierge for seamless appointments</p>
+        <h1>AI FrontDesk</h1>
+        <p>Intelligent Reception & Concierge Services</p>
       </header>
       <main className='app-main'>
         <ChatWindow messages={messages} onSendMessage={handleSendMessage} />
       </main>
       <footer className='app-footer'>
-        <p>Powered by AI • Secure • Private</p>
+        <p>Smart • Efficient • Available 24/7</p>
       </footer>
     </div>
   );

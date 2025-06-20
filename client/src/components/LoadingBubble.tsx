@@ -12,7 +12,7 @@ const LoadingBubble: React.FC<LoadingBubbleProps> = ({ type = 'default' }) => {
           <>
             <div className='script-indicator'>
               <div className='spinner'></div>
-              <span>Running script</span>
+              <span>Working on it...</span>
             </div>
           </>
         ) : (
