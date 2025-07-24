@@ -131,7 +131,7 @@ export async function bookAppointment(
          FILL_ERROR: "description of the problem"
 
       5. If everything looks correct:
-         - Click the final booking/confirmation button
+         - Click the final Book My Appointment button
          - Wait for the confirmation page to load
          - Look for "Thank you" and "Your booking was successful. We'll send you an email confirmation."
     `);

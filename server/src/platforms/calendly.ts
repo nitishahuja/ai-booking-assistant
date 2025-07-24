@@ -114,6 +114,7 @@ export async function bookAppointment(
       5. Look at ALL form fields (both required and optional) and their current state.
          - Enter the name: "${bookingDetails.name}"
          - Enter the email: "${bookingDetails.email}"
+         - Enter the phone number: "${bookingDetails.phone}"
          - Click the "Schedule Event" button
          - Wait for confirmation
     `);

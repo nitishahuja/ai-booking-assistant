@@ -209,7 +209,7 @@ export class GPTService extends EventEmitter {
 
 Platform-Specific Flows:
 1. For Calendly (Meetings):
-   - Collect: name, email, preferred date and time
+   - Collect: name, email, phone number, preferred date and time
    - Check availability for requested time
    - Show alternatives if requested time isn't available
    - Only book after user confirms a specific available time

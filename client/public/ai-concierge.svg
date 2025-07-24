@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="16" cy="16" r="16" fill="#0F2942"/>
+  
+  <!-- AI Letters -->
+  <path d="M10 8L13 24M13 24L16 8M13 24L19 24M19 24L22 8" stroke="#3699FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Concierge Bell -->
+  <path d="M8 18C8 14 11 12 16 12C21 12 24 14 24 18" stroke="#36D1DC" stroke-width="2" stroke-linecap="round"/>
+  <path d="M12 18H20" stroke="#36D1DC" stroke-width="2" stroke-linecap="round"/>
+</svg> 
