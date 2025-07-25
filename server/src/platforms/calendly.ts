@@ -13,6 +13,15 @@ export interface CalendlyResponse {
   error?: string;
 }
 
+const getAvailableSlots = async (date: string, time: string) => {
+  const availableSlots = await axios.get(
+    `https://calendly.com/api/booking/event_types/d6ff74c5-133f-4e39-a6ba-889b59d00293/calendar/range?timezone=America%2FNew_York&diagnostics=false&range_start=${
+      2025 - 07 - 25
+    }&range_end=${2025 - 07 - 31}&scheduling_link_uuid=cq8c-xxx-t9m`
+  );
+  return availableSlots;
+};
+
 /**
  * Phase 1: Check availability and select slot (but don't confirm)
  */
@@ -21,73 +30,79 @@ export async function checkAvailability(
   bookingDetails: BookingDetails
 ): Promise<CalendlyResponse> {
   const { page } = stagehand;
-
-  try {
-    console.log('🤖 Phase 1: Checking availability and selecting slot...');
-    await page.goto('https://calendly.com/aadhrik-myaifrontdesk/30min', {
-      timeout: 45000,
-      waitUntil: 'domcontentloaded',
-    });
-
-    const agent = stagehand.agent();
-
-    // Execute but stop before final confirmation
-    const response = await agent.execute(`
-      1. Open the calendar on the page.
-      2. Go to the date "${bookingDetails.date} and if the date is not available then return all available nearest dates".
-      3. Check all available time slots around "${bookingDetails.time}".
-      5. Return all available times.
-    `);
-
-    console.log('✅ Phase 1 completed: Slot selected and form ready');
-    console.log('📝 Agent response:', JSON.stringify(response, null, 2));
-
-    // Parse the response to get available times and selected slot
-    let parsedResponse;
-    let selectedTime;
+  if (CALENDLY_CONFIG.API_KEY && CALENDLY_CONFIG.API_KEY !== 'pseudo_api_key') {
+    const availableSlots = await getAvailableSlots(
+      bookingDetails.date,
+      bookingDetails.time
+    );
+  } else {
     try {
-      if (typeof response === 'string') {
-        const responseObj = JSON.parse(response);
-        parsedResponse = responseObj.answer;
-      } else if (response && typeof response === 'object') {
-        parsedResponse = response.message || JSON.stringify(response);
-      } else {
+      console.log('🤖 Phase 1: Checking availability and selecting slot...');
+      await page.goto('https://calendly.com/aadhrik-myaifrontdesk/30min', {
+        timeout: 45000,
+        waitUntil: 'domcontentloaded',
+      });
+
+      const agent = stagehand.agent();
+
+      // Execute but stop before final confirmation
+      const response = await agent.execute(`
+        1. Open the calendar on the page.
+        2. Go to the date "${bookingDetails.date} and if the date is not available then return all available nearest dates".
+        3. Check all available time slots around "${bookingDetails.time}".
+        5. Return all available times.
+      `);
+
+      console.log('✅ Phase 1 completed: Slot selected and form ready');
+      console.log('📝 Agent response:', JSON.stringify(response, null, 2));
+
+      // Parse the response to get available times and selected slot
+      let parsedResponse;
+      let selectedTime;
+      try {
+        if (typeof response === 'string') {
+          const responseObj = JSON.parse(response);
+          parsedResponse = responseObj.answer;
+        } else if (response && typeof response === 'object') {
+          parsedResponse = response.message || JSON.stringify(response);
+        } else {
+          parsedResponse = String(response);
+        }
+
+        // Try to extract the selected time from the response
+        const timeMatch = parsedResponse.match(
+          /selected.*?(\d{1,2}:\d{2}\s*(?:am|pm))/i
+        );
+        if (timeMatch) {
+          selectedTime = timeMatch[1].toLowerCase().replace(/\s+/g, '');
+        }
+      } catch (e) {
+        console.log('⚠️ Error parsing response:', e);
         parsedResponse = String(response);
       }
 
-      // Try to extract the selected time from the response
-      const timeMatch = parsedResponse.match(
-        /selected.*?(\d{1,2}:\d{2}\s*(?:am|pm))/i
-      );
-      if (timeMatch) {
-        selectedTime = timeMatch[1].toLowerCase().replace(/\s+/g, '');
+      // Take a screenshot of the form state
+      try {
+        await page.screenshot({ path: `slot-selected-${Date.now()}.png` });
+      } catch (e) {
+        console.error('Failed to take form screenshot:', e);
       }
-    } catch (e) {
-      console.log('⚠️ Error parsing response:', e);
-      parsedResponse = String(response);
-    }
 
-    // Take a screenshot of the form state
-    try {
-      await page.screenshot({ path: `slot-selected-${Date.now()}.png` });
-    } catch (e) {
-      console.error('Failed to take form screenshot:', e);
+      return {
+        success: true,
+        message: parsedResponse,
+        requestedTime: bookingDetails.time,
+        selectedTime,
+        isReadyToConfirm: true,
+      };
+    } catch (err: any) {
+      console.error('❌ Error in availability check:', err);
+      return {
+        success: false,
+        message: err.message || 'Failed to check availability',
+        requestedTime: bookingDetails.time,
+      };
     }
-
-    return {
-      success: true,
-      message: parsedResponse,
-      requestedTime: bookingDetails.time,
-      selectedTime,
-      isReadyToConfirm: true,
-    };
-  } catch (err: any) {
-    console.error('❌ Error in availability check:', err);
-    return {
-      success: false,
-      message: err.message || 'Failed to check availability',
-      requestedTime: bookingDetails.time,
-    };
   }
 }
 
