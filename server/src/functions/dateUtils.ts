@@ -34,6 +34,45 @@ const weekdayMap: { [key: string]: number } = {
   saturday: 6,
 };
 
+interface DateRange {
+  start: string;
+  end: string;
+}
+
+/**
+ * Calculate date range based on input date and range type
+ * @param date Base date to calculate range from
+ * @param rangeType Type of range to calculate ('week' | 'month' | number of days)
+ * @returns Object with start and end dates in YYYY-MM-DD format
+ */
+export function calculateDateRange(
+  date: string,
+  rangeType: 'week' | 'month' | number = 'week'
+): DateRange {
+  const normalizedDate = normalizeBookingDate({ dateStr: date });
+  if (!normalizedDate.isValid) {
+    throw new Error('Invalid date provided for range calculation');
+  }
+
+  const startDate = dayjs(normalizedDate.date);
+  let endDate: dayjs.Dayjs;
+
+  if (rangeType === 'week') {
+    endDate = startDate.add(7, 'day');
+  } else if (rangeType === 'month') {
+    endDate = startDate.add(1, 'month');
+  } else if (typeof rangeType === 'number') {
+    endDate = startDate.add(rangeType, 'day');
+  } else {
+    endDate = startDate.add(7, 'day'); // Default to week
+  }
+
+  return {
+    start: startDate.format('YYYY-MM-DD'),
+    end: endDate.format('YYYY-MM-DD'),
+  };
+}
+
 function parseRelativeDate(dateStr: string): dayjs.Dayjs | null {
   const lowercaseStr = dateStr.toLowerCase().trim();
 
@@ -103,17 +142,41 @@ export const dateSchema = {
   description: 'Validate and normalize a date string into a consistent format',
   parameters: z.object({
     dateStr: z.string().describe('The date string to normalize'),
+    rangeType: z
+      .union([z.literal('week'), z.literal('month'), z.number()])
+      .optional()
+      .describe(
+        'Optional range type to calculate (week, month, or number of days)'
+      ),
   }),
 };
 
-export function normalizeBookingDate({ dateStr }: { dateStr: string }) {
+export interface NormalizedDateResult {
+  date: string;
+  isValid: boolean;
+  wasAmbiguous: boolean;
+  message?: string;
+  range?: DateRange;
+}
+
+export function normalizeBookingDate({
+  dateStr,
+  rangeType,
+}: {
+  dateStr: string;
+  rangeType?: 'week' | 'month' | number;
+}): NormalizedDateResult {
   // Try to parse relative dates first
   const relativeDate = parseRelativeDate(dateStr);
   if (relativeDate) {
+    const normalizedDate = relativeDate.format('YYYY-MM-DD');
     return {
-      date: relativeDate.format('YYYY-MM-DD'),
+      date: normalizedDate,
       isValid: true,
       wasAmbiguous: false,
+      ...(rangeType && {
+        range: calculateDateRange(normalizedDate, rangeType),
+      }),
     };
   }
 
@@ -131,17 +194,26 @@ export function normalizeBookingDate({ dateStr }: { dateStr: string }) {
         const finalDate = withThisYear.isBefore(dayjs())
           ? withNextYear
           : withThisYear;
+
+        const normalizedDate = finalDate.format('YYYY-MM-DD');
         return {
-          date: finalDate.format('YYYY-MM-DD'),
+          date: normalizedDate,
           isValid: true,
           wasAmbiguous: false,
+          ...(rangeType && {
+            range: calculateDateRange(normalizedDate, rangeType),
+          }),
         };
       }
 
+      const normalizedDate = parsed.format('YYYY-MM-DD');
       return {
-        date: parsed.format('YYYY-MM-DD'),
+        date: normalizedDate,
         isValid: true,
         wasAmbiguous: false,
+        ...(rangeType && {
+          range: calculateDateRange(normalizedDate, rangeType),
+        }),
       };
     }
   }

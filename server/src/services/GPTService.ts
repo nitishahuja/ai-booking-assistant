@@ -120,6 +120,8 @@ export class GPTService extends EventEmitter {
     let session = this.agents.get(this.ws);
 
     if (!session) {
+      // Only create agent when actually needed
+      console.log('🔄 Creating new browser agent session...');
       const agent = new BrowserAgent();
       await agent.initialize();
 
@@ -139,7 +141,7 @@ export class GPTService extends EventEmitter {
       };
 
       this.agents.set(this.ws, session);
-      console.log('🔄 Created new browser agent session');
+      console.log('✅ Browser agent session created');
     } else {
       session.lastUsed = Date.now();
       clearTimeout(session.timeoutId);
@@ -209,7 +211,7 @@ export class GPTService extends EventEmitter {
 
 Platform-Specific Flows:
 1. For Calendly (Meetings):
-   - Collect: name, email, phone number, preferred date and time
+   - Collect: name, email, phone number, preferred date and time.
    - Check availability for requested time
    - Show alternatives if requested time isn't available
    - Only book after user confirms a specific available time
@@ -278,7 +280,7 @@ Important:
       let shouldContinue = true;
       while (shouldContinue) {
         const stream = await this.openai.chat.completions.create({
-          model: 'gpt-4',
+          model: 'gpt-4.1-mini',
           messages: history,
           tools: tools,
           stream: true,
@@ -321,58 +323,65 @@ Important:
               functionName === 'submitOTP'
             ) {
               try {
-                const session = await this.getOrCreateAgent();
                 this.setScriptExecutionStatus(true);
 
-                if (functionName === 'checkAvailability') {
-                  result = await this.handleAvailabilityCheck(
-                    session,
-                    JSON.parse(functionArgs)
-                  );
-                } else if (functionName === 'bookAppointment') {
-                  result = await this.handleBooking(
-                    session,
-                    JSON.parse(functionArgs)
-                  );
+                // Parse arguments first
+                const args = JSON.parse(functionArgs);
+
+                // Only Calendly gets special treatment
+                if (
+                  functionName === 'checkAvailability' &&
+                  args.platform === 'calendly'
+                ) {
+                  result = await this.handleAvailabilityCheck(args);
                 } else {
-                  // Handle submitOTP
-                  const { otp } = JSON.parse(functionArgs);
-                  const { name, email, phone, date, time, platform } =
-                    session.bookingDetails;
+                  // All other operations use agent as before
+                  const session = await this.getOrCreateAgent();
 
-                  // Ensure we have all required fields
-                  if (
-                    !name ||
-                    !email ||
-                    !phone ||
-                    !date ||
-                    !time ||
-                    platform !== 'opentable'
-                  ) {
-                    throw new Error(
-                      'Missing required booking information for OTP submission'
+                  if (functionName === 'checkAvailability') {
+                    result = await this.handleAvailabilityCheck(args);
+                  } else if (functionName === 'bookAppointment') {
+                    result = await this.handleBooking(session, args);
+                  } else {
+                    // Handle submitOTP
+                    const { otp } = args;
+                    const { name, email, phone, date, time, platform } =
+                      session.bookingDetails;
+
+                    // Ensure we have all required fields
+                    if (
+                      !name ||
+                      !email ||
+                      !phone ||
+                      !date ||
+                      !time ||
+                      platform !== 'opentable'
+                    ) {
+                      throw new Error(
+                        'Missing required booking information for OTP submission'
+                      );
+                    }
+
+                    result = await opentable.submitOTP(
+                      session.agent.getStagehand(),
+                      {
+                        name,
+                        email,
+                        phone,
+                        date,
+                        time,
+                        platform: 'opentable',
+                        partySize: session.bookingDetails.partySize,
+                        occasion: session.bookingDetails.occasion,
+                        specialRequests: session.bookingDetails.specialRequests,
+                      },
+                      otp
                     );
-                  }
 
-                  result = await opentable.submitOTP(
-                    session.agent.getStagehand(),
-                    {
-                      name,
-                      email,
-                      phone,
-                      date,
-                      time,
-                      platform: 'opentable',
-                      partySize: session.bookingDetails.partySize,
-                      occasion: session.bookingDetails.occasion,
-                      specialRequests: session.bookingDetails.specialRequests,
-                    },
-                    otp
-                  );
-
-                  if (result.success) {
-                    session.state = 'completed';
-                    await this.cleanupAgentSession(this.ws);
+                    if (result.success) {
+                      session.state = 'completed';
+                      await this.cleanupAgentSession(this.ws);
+                    }
                   }
                 }
 
@@ -412,17 +421,15 @@ Important:
     }
   }
 
-  private async handleAvailabilityCheck(session: AgentSession, args: any) {
-    session.state = 'checking';
-    session.bookingDetails = {
-      ...session.bookingDetails,
+  private async handleAvailabilityCheck(args: any) {
+    const bookingDetails = {
       date: args.date,
       time: args.time,
       platform: args.platform || 'calendly',
     };
 
     // Skip availability check for Housecall Pro
-    if (session.bookingDetails.platform === 'housecallpro') {
+    if (bookingDetails.platform === 'housecallpro') {
       return {
         success: true,
         message:
@@ -431,36 +438,63 @@ Important:
       };
     }
 
-    let result;
-    if (session.bookingDetails.platform === 'opentable') {
-      result = await opentable.checkAvailability(
-        session.agent.getStagehand(),
-        args
-      );
-    } else {
-      result = await calendly.checkAvailability(
-        session.agent.getStagehand(),
-        args
-      );
-    }
+    try {
+      let result;
+      let session: AgentSession | null = null;
 
-    if (result.success && result.isReadyToConfirm) {
-      session.state = 'awaiting_confirmation';
-      session.bookingDetails = {
-        ...session.bookingDetails,
-        selectedTime: result.selectedTime,
-        isReadyToConfirm: true,
-      };
-      clearTimeout(session.timeoutId);
-      session.timeoutId = setTimeout(
-        () => this.cleanupAgentSession(this.ws),
-        AGENT_SESSION_TIMEOUT
-      );
-    } else {
+      if (bookingDetails.platform === 'opentable') {
+        // OpenTable always needs the agent
+        session = await this.getOrCreateAgent();
+        session.state = 'checking';
+        session.bookingDetails = bookingDetails;
+
+        result = await opentable.checkAvailability(
+          session.agent.getStagehand(),
+          args
+        );
+      } else {
+        // Try Calendly API first without agent
+        result = await calendly.checkAvailability(null, args);
+
+        // If API failed, try with agent
+        if (!result.success && result.error) {
+          console.log('🔄 Creating agent for Calendly fallback...');
+          session = await this.getOrCreateAgent();
+          session.state = 'checking';
+          session.bookingDetails = bookingDetails;
+
+          result = await calendly.checkAvailabilityWithAgent(
+            session.agent.getStagehand(),
+            args
+          );
+        }
+      }
+
+      // Handle session state if we created one
+      if (session) {
+        if (result.success && result.isReadyToConfirm) {
+          session.state = 'awaiting_confirmation';
+          session.bookingDetails = {
+            ...session.bookingDetails,
+            selectedTime: result.selectedTime,
+            isReadyToConfirm: true,
+          };
+          clearTimeout(session.timeoutId);
+          session.timeoutId = setTimeout(
+            () => this.cleanupAgentSession(this.ws),
+            AGENT_SESSION_TIMEOUT
+          );
+        } else {
+          await this.cleanupAgentSession(this.ws);
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error('❌ Error in availability check:', error);
       await this.cleanupAgentSession(this.ws);
+      throw error;
     }
-
-    return result;
   }
 
   private async handleBooking(session: AgentSession, args: any) {
